@@ -10,6 +10,31 @@ function nodesById(content) {
   return new Map(content.nodes.map((n) => [n.id, n]));
 }
 
+// 取某条已完成路径条目所对应选项的评分；旧冻结版本没有评分字段时各步按 0 分处理
+function optionScoreOf(content, nodeMap, entry) {
+  const fromNode = nodeMap.get(entry.fromNodeId);
+  const opt = fromNode ? fromNode.options.find((o) => o.id === entry.optionId) : null;
+  const score = opt && Number.isInteger(opt.score) ? opt.score : 0;
+  const scoreNote = opt && typeof opt.scoreNote === 'string' ? opt.scoreNote : '';
+  return { score, scoreNote };
+}
+
+// 截至指定步号（含）已完成路径的累计分；fork 分支继承的正是“截至分歧步”的累计分
+function cumulativeScore(content, nodeMap, path, uptoStep) {
+  let total = 0;
+  for (const p of path) {
+    if (uptoStep !== undefined && p.step > uptoStep) break;
+    total += optionScoreOf(content, nodeMap, p).score;
+  }
+  return total;
+}
+
+// 冻结内容是否包含评分字段（新版本草稿经规范化后每个选项都有 score；旧版本没有）
+function contentHasScores(content) {
+  return !!(content.nodes || []).some((n) => (n.options || []).some((o) =>
+    Object.prototype.hasOwnProperty.call(o, 'score')));
+}
+
 // 构造返回给前端的完整现状快照
 function buildSnapshot(content, session, scenarioId, version) {
   const nodeMap = nodesById(content);
@@ -48,6 +73,8 @@ function buildSnapshot(content, session, scenarioId, version) {
     const fromNode = nodeMap.get(p.fromNodeId);
     const toNode = nodeMap.get(p.toNodeId);
     const fromN = fromNode ? fromNode.options.find((o) => o.id === p.optionId) : null;
+    const { score, scoreNote } = optionScoreOf(content, nodeMap, p);
+    const inherited = !!session.parent_code && p.step <= (session.fork_step_no ?? 0);
     return {
       step: p.step,
       fromNodeId: p.fromNodeId,
@@ -57,8 +84,17 @@ function buildSnapshot(content, session, scenarioId, version) {
       toNodeId: p.toNodeId,
       toNodeTitle: toNode ? toNode.title : p.toNodeId,
       stateAfter: formatStateValues(content, p.stateMask),
+      score,                       // 本步得分（旧版本无评分字段时为 0）
+      scoreNote: scoreNote || '',  // 培训师为该选项填写的评分说明
+      scoreAfter: cumulativeScore(content, nodeMap, path, p.step), // 完成本步后的累计分
+      inherited,                   // 分支中从源会话继承而来的步（非本会话的选择）
     };
   });
+
+  const totalScore = cumulativeScore(content, nodeMap, path);
+  const inheritedScore = session.parent_code
+    ? cumulativeScore(content, nodeMap, path, session.fork_step_no ?? 0)
+    : 0;
 
   return {
     code: session.code,
@@ -66,6 +102,9 @@ function buildSnapshot(content, session, scenarioId, version) {
     version,
     status: session.status,
     stepNo: session.step_no,
+    totalScore,                  // 当前累计分（按所绑定冻结版本的选项分值计算）
+    inheritedScore,              // 分支从源会话继承的累计分；非分支为 0
+    scoringSupported: contentHasScores(content), // 旧冻结版本无评分字段时为 false（各步按 0 分）
     currentNode: node ? {
       id: node.id,
       title: node.title,
@@ -326,4 +365,12 @@ function loadLineage(db, code) {
 }
 
 
-module.exports = { buildSnapshot, performMove, forkSession, loadLineage, nodesById };
+module.exports = {
+  buildSnapshot,
+  performMove,
+  forkSession,
+  loadLineage,
+  nodesById,
+  cumulativeScore,
+  contentHasScores,
+};

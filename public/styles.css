@@ -182,6 +182,39 @@ code { background: #eef2f6; padding: 1px 6px; border-radius: 4px; font-size: 12p
 .path-list li { margin-bottom: 8px; font-size: 13px; }
 .path-list .pl-sub { color: var(--muted); font-size: 12px; display: block; }
 .path-list .pl-end { color: var(--ok); font-weight: 600; }
+.path-list .pl-score-note { display: block; font-size: 12px; color: var(--brand-dark); background: #f2f7fd; border-radius: 6px; padding: 3px 8px; margin: 3px 0; }
+.path-list li.path-inherited { opacity: .85; }
+
+/* 评分徽标 */
+.score-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.score-pos { color: var(--ok); }
+.score-neg { color: var(--err); }
+.score-zero { color: var(--muted); }
+.score-badge.score-pos { background: var(--ok-bg); }
+.score-badge.score-neg { background: var(--err-bg); }
+.score-badge.score-zero { background: #eef1f4; }
+.inherited-tag {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--brand);
+  background: #e8f0fa;
+  border-radius: 999px;
+  padding: 1px 7px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+/* 编辑器：分值行 */
+.opt-score-row .inline { align-items: center; flex-wrap: wrap; gap: 8px; }
+.opt-score-row input[type="number"] { font-weight: 700; text-align: center; }
 
 .banner { border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; font-size: 13px; }
 .banner.error { background: var(--err-bg); color: var(--err); border: 1px solid #f5c4bf; }

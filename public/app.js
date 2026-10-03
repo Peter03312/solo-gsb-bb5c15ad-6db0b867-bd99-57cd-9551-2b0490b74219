@@ -103,7 +103,7 @@ async function loadSessionList() {
   if (!list.length) { box.innerHTML = ''; return; }
   box.innerHTML = `
     <table class="ses-table">
-      <thead><tr><th>会话码</th><th>情境</th><th>版本</th><th>状态</th><th>步数</th><th>来源</th><th>学员</th><th></th></tr></thead>
+      <thead><tr><th>会话码</th><th>情境</th><th>版本</th><th>状态</th><th>步数</th><th>总分</th><th>来源</th><th>学员</th><th></th></tr></thead>
       <tbody>
         ${list.map((s) => `
           <tr>
@@ -112,6 +112,7 @@ async function loadSessionList() {
             <td>v${s.version}</td>
             <td class="${s.status === 'active' ? 'status-active' : 'status-ended'}">${s.status === 'active' ? '进行中' : '已结局'}</td>
             <td>${s.step_no}</td>
+            <td><b class="${scoreClass(s.total_score ?? 0)}">${s.total_score ?? 0}</b></td>
             <td>${s.parent_code
               ? `分支↩<code data-lineage-jump="${esc(s.parent_code)}" title="查看源会话">${esc(s.parent_code)}</code>@${s.fork_step_no}步`
               : '<span class="muted">原始</span>'}</td>
@@ -206,6 +207,14 @@ function renderSession() {
   $('#ses-code').textContent = s.code;
   $('#ses-version').textContent = 'v' + s.version;
   $('#ses-step').textContent = s.stepNo;
+  const scoreEl = $('#ses-score');
+  scoreEl.textContent = s.totalScore ?? 0;
+  scoreEl.className = scoreClass(s.totalScore ?? 0);
+  if (s.scoringSupported === false) {
+    scoreEl.title = '该会话绑定的旧版本没有评分字段，各步按 0 分处理';
+  } else {
+    scoreEl.title = '各选项分值之和（-10 至 10 / 步）';
+  }
 
   // 溯源标记
   const lin = s.lineage || {};
@@ -229,7 +238,10 @@ function renderSession() {
   const optBox = $('#option-list');
   if (s.status === 'ended') {
     optBox.innerHTML = '<div class="muted">演练已结束。</div>';
-    showBanner(`演练结束：已到达结局「${node ? node.title : ''}」，共 ${s.stepNo} 步。${lin.isBranch ? '（本会话为复盘分支，可在右侧从更早的步骤再次分叉）' : '（可在右侧从历史步分叉复盘）'}`, 'ok');
+    const scoreLine = s.scoringSupported === false
+      ? '（绑定的旧版本无评分字段，各步按 0 分处理）'
+      : `本会话总分 <b class="${scoreClass(s.totalScore ?? 0)}">${s.totalScore ?? 0}</b> 分`;
+    showBanner(`演练结束：已到达结局「${node ? node.title : ''}」，共 ${s.stepNo} 步，${scoreLine}。${lin.isBranch ? '（本会话为复盘分支，可在右侧从更早的步骤再次分叉）' : '（可在右侧从历史步分叉复盘）'}`, 'ok');
   } else {
     const avail = s.availableOptions.map((o) => `
       <button class="option-btn" data-opt="${esc(o.id)}">
@@ -254,14 +266,31 @@ function renderSession() {
   loadLineageView(s.code);
 }
 
+function scoreClass(v) {
+  if (v > 0) return 'score-pos';
+  if (v < 0) return 'score-neg';
+  return 'score-zero';
+}
+
+function scoreBadge(v) {
+  const cls = scoreClass(v);
+  const sign = v > 0 ? `+${v}` : String(v);
+  return `<span class="score-badge ${cls}" title="本步得分（-10 至 10）">${sign} 分</span>`;
+}
+
 function renderPathItem(p, snap) {
   const isFinal = snap && p.toNodeTitle && snap.status === 'ended' && p.step === snap.stepNo;
+  const inheritedTag = p.inherited
+    ? '<span class="inherited-tag" title="该步是分支从源会话继承的已完成路径，不计入分支自己的选择">🔗 继承自源会话</span>'
+    : '';
   return `
-    <li>
+    <li class="${p.inherited ? 'path-inherited' : ''}">
       <b>第 ${p.step} 步</b>：${esc(p.fromNodeTitle)}
       —「${esc(p.optionLabel)}」→
       <span class="${isFinal ? 'pl-end' : ''}">${esc(p.toNodeTitle)}</span>
-      <span class="pl-sub">状态：${p.stateAfter.map((x) => `${esc(x.name)}=${x.value ? '是' : '否'}`).join('，') || '无'}</span>
+      ${scoreBadge(p.score ?? 0)}${inheritedTag}
+      ${p.scoreNote ? `<span class="pl-score-note">📝 ${esc(p.scoreNote)}</span>` : ''}
+      <span class="pl-sub">状态：${p.stateAfter.map((x) => `${esc(x.name)}=${x.value ? '是' : '否'}`).join('，') || '无'}；完成本步后累计 ${p.scoreAfter ?? 0} 分</span>
     </li>`;
 }
 
@@ -304,6 +333,15 @@ $('#option-list').addEventListener('click', async (e) => {
     currentSession = snap;
     hideBanner();
     renderSession();
+    // 有效选择：展示该步得分、评分说明与当前累计分
+    const ms = snap.moveScore;
+    if (ms) {
+      const sign = ms.score > 0 ? `+${ms.score}` : String(ms.score);
+      const noteLine = ms.scoreNote ? `<br>📝 ${esc(ms.scoreNote)}` : '';
+      const endLine = ms.reachedEnd ? `<br>演练已结束，本会话总分 <b>${ms.totalScore}</b> 分。` : '';
+      showBanner(`本步得分 <b class="${scoreClass(ms.score)}">${sign}</b> 分；当前累计分 <b class="${scoreClass(ms.totalScore)}">${ms.totalScore}</b> 分。${noteLine}${endLine}`,
+        ms.score < 0 ? 'error' : 'ok');
+    }
     loadSessionList();
   } catch (err) {
     // 过期/不满足条件：展示服务器返回的原因与现状，不推进
@@ -333,7 +371,7 @@ $('#btn-fork').addEventListener('click', async () => {
       body: { forkStepNo, observedStepNo, traineeName },
     });
     enterSession(snap);
-    showBanner(`已从源会话 ${sourceCode} 的第 ${forkStepNo} 步创建分支（沿用冻结版本 v${snap.version}），后续选择只推进本分支。`, 'ok');
+    showBanner(`已从源会话 ${sourceCode} 的第 ${forkStepNo} 步创建分支（沿用冻结版本 v${snap.version}）。分支继承截至第 ${forkStepNo} 步的累计分 <b>${snap.inheritedScore ?? 0}</b> 分，后续仅计本分支自己的选择；源会话与其它分支不变。`, 'ok');
     toast('分支已创建，可在此局面继续选择', 'ok');
     loadSessionList();
   } catch (err) {
@@ -385,13 +423,14 @@ function renderLineageNode(node, currentCode, depth = 0) {
       </div>
       <div class="lg-meta muted">
         v${node.version} · ${node.status === 'active' ? `<span class="status-active">进行中·第${node.stepNo}步</span>` : `<span class="status-ended">已结局·共${node.stepNo}步</span>`}
+        · 总分 <b class="${scoreClass(node.totalScore ?? 0)}">${node.totalScore ?? 0}</b>${isBranch ? `（继承 ${node.inheritedScore ?? 0} + 本分支 ${(node.totalScore ?? 0) - (node.inheritedScore ?? 0)}）` : ''}${node.scoringSupported === false ? ' · <span title="绑定的旧版本无评分字段，各步按 0 分处理">旧版无评分</span>' : ''}
         · 当前：${esc(node.currentNode ? node.currentNode.title : '?')}${node.traineeName ? ' · ' + esc(node.traineeName) : ''}
       </div>
       ${node.path.length ? `
         <details class="lg-path" ${isCurrent ? 'open' : ''}>
-          <summary>后续路径（${node.path.length} 步）${isBranch ? `；保留源第 1..${node.lineage.forkStepNo} 步，自第 ${node.lineage.forkStepNo} 步局面另走` : ''}</summary>
+          <summary>逐步得分与路径（${node.path.length} 步）${isBranch ? `；第 1..${node.lineage.forkStepNo} 步继承自源会话，之后为本分支自己的选择` : ''}</summary>
           <ol class="path-list">${node.path.map((p) => renderPathItem(p, node)).join('')}</ol>
-        </details>` : '<div class="muted lg-meta">第 0 步（尚未选择）</div>'}
+        </details>` : '<div class="muted lg-meta">第 0 步（尚未选择，总分 0）</div>'}
     </div>`;
   const children = (node.children || []).map((c) => renderLineageNode(c, currentCode, depth + 1)).join('');
   return head + children;
@@ -433,7 +472,7 @@ $('#btn-new-scenario').addEventListener('click', async () => {
     startNodeId: 'n1',
     nodes: [
       { id: 'n1', title: '起点', narrative: '描述事故发生的初始情况……', isEnd: false, options: [
-        { id: 'o1', label: '第一个处置选择', conditions: [], changes: [], toNodeId: 'n2' },
+        { id: 'o1', label: '第一个处置选择', conditions: [], changes: [], toNodeId: 'n2', score: null, scoreNote: '' },
       ] },
       { id: 'n2', title: '结局', narrative: '描述该处置的结果……', isEnd: true, options: [] },
     ],
@@ -558,12 +597,27 @@ function renderTermRows(kind, terms, ni, oi) {
 }
 
 function renderOption(n, o, ni, oi) {
+  const scoreVal = o.score === undefined || o.score === null ? '' : o.score;
   return `
     <div class="opt-block">
       <div class="opt-head">
         <input class="input sm" style="width:80px" value="${esc(o.id)}" data-bind="opt-id" data-ni="${ni}" data-oi="${oi}" placeholder="选项id" />
         <input class="input label" value="${esc(o.label)}" data-bind="opt-label" data-ni="${ni}" data-oi="${oi}" placeholder="选项文案（学员看到的处置动作）" />
         <button class="btn ghost danger" data-act="del-opt" data-ni="${ni}" data-oi="${oi}">删除</button>
+      </div>
+      <div class="field opt-score-row">
+        <label>本选项分值（整数 -10 至 10，留空视为 0；保存时拒绝非整数或越界值）</label>
+        <div class="inline">
+          <input class="input sm" style="width:84px" type="number" step="1" min="-10" max="10"
+                 value="${esc(scoreVal)}" data-bind="opt-score" data-ni="${ni}" data-oi="${oi}" placeholder="0" />
+          <span class="muted">正分＝处置得当，负分＝处置错误；发布后随版本冻结</span>
+        </div>
+      </div>
+      <div class="field">
+        <label>评分说明（学员选择该选项后可见，可留空）</label>
+        <textarea class="input" style="min-height:42px" maxlength="500"
+                  data-bind="opt-scorenote" data-ni="${ni}" data-oi="${oi}"
+                  placeholder="例如：先断电再侦查，符合可燃气体泄漏处置原则……">${esc(o.scoreNote || '')}</textarea>
       </div>
       <div class="field">
         <label>显示条件（全部满足时该选项可选）</label>
@@ -622,7 +676,7 @@ function onEditorAction(e) {
     case 'add-opt':
       d.nodes[ni].options.push({
         id: uid('o'), label: '新选择', conditions: [], changes: [],
-        toNodeId: d.nodes[ni].id,
+        toNodeId: d.nodes[ni].id, score: null, scoreNote: '',
       });
       break;
     case 'del-opt':
@@ -662,6 +716,16 @@ $('#trainer-editor').addEventListener('input', (e) => {
     case 'node-narr': d.nodes[ni].narrative = el.value; break;
     case 'opt-id': d.nodes[ni].options[oi].id = el.value; break;
     case 'opt-label': d.nodes[ni].options[oi].label = el.value; break;
+    // 分值：合法整数直接存数值；留空存 null（保存时按 0）；非整数/越界保留原始文本，由服务端拒绝并提示
+    case 'opt-score': {
+      const raw = el.value.trim();
+      const opt2 = d.nodes[ni].options[oi];
+      if (raw === '') opt2.score = null;
+      else if (/^[+-]?\d+$/.test(raw)) opt2.score = parseInt(raw, 10);
+      else opt2.score = raw;
+      break;
+    }
+    case 'opt-scorenote': d.nodes[ni].options[oi].scoreNote = el.value; break;
     default: break;
   }
 });

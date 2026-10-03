@@ -4,9 +4,30 @@
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_STATES = 8;
+const SCORE_MIN = -10;
+const SCORE_MAX = 10;
+const SCORE_NOTE_MAX = 500;
 
 function isBool(v) {
   return v === true || v === false;
+}
+
+// 规范化选项分值：缺省（undefined）或 null 视为 0；
+// 必须是 -10..10 的整数（接受数学意义上的整数，如 3.0 也按 3 存）。
+// 返回 { score, error }
+function normalizeScore(raw, label, at, errors) {
+  if (raw === undefined || raw === null) return { score: 0 };
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || !Number.isInteger(raw)) {
+    errors.push(bad('OPTION_SCORE_INVALID',
+      `选项「${label}」的分值必须是整数（-10 至 10），未填写按 0 分；收到：${JSON.stringify(raw)}`, at));
+    return { score: null };
+  }
+  if (raw < SCORE_MIN || raw > SCORE_MAX) {
+    errors.push(bad('OPTION_SCORE_OUT_OF_RANGE',
+      `选项「${label}」的分值越界：${raw}（允许范围 ${SCORE_MIN} 至 ${SCORE_MAX}）`, at));
+    return { score: null };
+  }
+  return { score: raw };
 }
 
 function bad(code, message, at) {
@@ -158,12 +179,30 @@ function normalizeDraft(raw) {
           errors.push(bad('TARGET_ID_INVALID', `选项「${label || o.id}」缺少有效的目标节点 id`, oat));
         }
 
+        // 分值：-10..10 的整数，缺省/ null 视为 0；非整数或越界在保存时拒绝
+        const scoreResult = normalizeScore(o.score, label || o.id, oat, errors);
+        // 评分说明：可留空，最长 500 字
+        let scoreNote = '';
+        if (o.scoreNote !== undefined && o.scoreNote !== null) {
+          if (typeof o.scoreNote !== 'string') {
+            errors.push(bad('OPTION_SCORE_NOTE_INVALID', `选项「${label || o.id}」的评分说明必须是文本`, oat));
+          } else {
+            scoreNote = o.scoreNote.trim();
+            if (scoreNote.length > SCORE_NOTE_MAX) {
+              errors.push(bad('OPTION_SCORE_NOTE_TOO_LONG',
+                `选项「${label || o.id}」的评分说明最长 ${SCORE_NOTE_MAX} 字，当前 ${scoreNote.length} 字`, oat));
+            }
+          }
+        }
+
         options.push({
           id: ID_RE.test(o.id || '') ? o.id : `__bad_opt_${j}`,
           label,
           conditions: conds,
           changes,
           toNodeId: typeof o.toNodeId === 'string' ? o.toNodeId : '',
+          score: scoreResult.score ?? 0,
+          scoreNote,
         });
       }
 
@@ -215,6 +254,8 @@ function normalizeDraft(raw) {
         conditions: o.conditions,
         changes: o.changes,
         toNodeId: o.toNodeId,
+        score: o.score,
+        scoreNote: o.scoreNote,
       })),
     })),
   };
@@ -497,6 +538,8 @@ function formatPathReport(scenario, segments) {
 
 module.exports = {
   MAX_STATES,
+  SCORE_MIN,
+  SCORE_MAX,
   normalizeDraft,
   analyze,
   witnessPath,

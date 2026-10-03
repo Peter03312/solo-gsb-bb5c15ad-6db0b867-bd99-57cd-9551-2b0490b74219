@@ -15,7 +15,7 @@ const {
   initialMask,
   decodeKey,
 } = require('./scenario');
-const { buildSnapshot, performMove, forkSession, loadLineage } = require('./session');
+const { buildSnapshot, performMove, forkSession, loadLineage, cumulativeScore, nodesById } = require('./session');
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'app.db');
@@ -268,11 +268,32 @@ app.get('/api/sessions', (req, res) => {
   const rows = db.prepare(`
     SELECT se.code, se.scenario_id, s.title AS scenario_title, se.version, se.status,
            se.step_no, se.trainee_name, se.current_node_id, se.created_at, se.updated_at,
-           se.parent_code, se.fork_step_no, se.root_code
+           se.parent_code, se.fork_step_no, se.root_code, se.path
       FROM sessions se JOIN scenarios s ON s.id = se.scenario_id
      ORDER BY se.updated_at DESC LIMIT 200
   `).all();
-  res.json(rows);
+  // 总分按各会话绑定版本的选项分值从已完成路径计算（旧版本无评分字段则各步 0 分）；
+  // 版本内容缓存，避免逐行重复解析。
+  const contentCache = new Map();
+  const contentFor = (scenarioId, version) => {
+    const key = `${scenarioId}|${version}`;
+    if (!contentCache.has(key)) {
+      const r = db.prepare('SELECT content FROM versions WHERE scenario_id = ? AND version = ?')
+        .get(scenarioId, version);
+      contentCache.set(key, r ? JSON.parse(r.content) : null);
+    }
+    return contentCache.get(key);
+  };
+  const out = rows.map((se) => {
+    const content = contentFor(se.scenario_id, se.version);
+    let totalScore = null;
+    if (content) {
+      totalScore = cumulativeScore(content, nodesById(content), JSON.parse(se.path || '[]'));
+    }
+    const { path, ...rest } = se; // path 仅用于计分，不改变列表既有字段
+    return { ...rest, total_score: totalScore };
+  });
+  res.json(out);
 });
 
 // 查询会话现状
@@ -305,10 +326,20 @@ app.post('/api/sessions/:code/move', (req, res) => {
     });
   }
   const sc = db.prepare('SELECT title FROM scenarios WHERE id = ?').get(result.session.scenario_id);
+  const snap = buildSnapshot(result.content, result.session, result.session.scenario_id, result.session.version);
+  const lastStep = snap.path.length ? snap.path[snap.path.length - 1] : null;
   res.json({
     ok: true,
-    ...buildSnapshot(result.content, result.session, result.session.scenario_id, result.session.version),
+    ...snap,
     scenarioTitle: sc ? sc.title : null,
+    // 本次有效选择的得分反馈：该步得分、评分说明、完成后的累计分
+    moveScore: lastStep ? {
+      step: lastStep.step,
+      score: lastStep.score,
+      scoreNote: lastStep.scoreNote,
+      totalScore: snap.totalScore,
+      reachedEnd: result.session.status === 'ended',
+    } : null,
   });
 });
 
