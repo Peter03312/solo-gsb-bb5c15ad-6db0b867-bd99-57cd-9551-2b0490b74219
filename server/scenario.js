@@ -4,6 +4,9 @@
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_STATES = 8;
+const SCORE_MIN = -10;
+const SCORE_MAX = 10;
+const SCORE_NOTE_MAX = 500;
 
 function isBool(v) {
   return v === true || v === false;
@@ -158,12 +161,40 @@ function normalizeDraft(raw) {
           errors.push(bad('TARGET_ID_INVALID', `选项「${label || o.id}」缺少有效的目标节点 id`, oat));
         }
 
+        // 分值：-10..10 的整数；缺省（null/undefined/空串）按 0 分；
+        // 非整数或越界拒绝保存。评分说明为可选文本。
+        let score = 0;
+        if (o.score === undefined || o.score === null) {
+          score = 0; // 未填写视为 0
+        } else if (typeof o.score === 'number' && Number.isInteger(o.score)
+                   && o.score >= SCORE_MIN && o.score <= SCORE_MAX) {
+          score = o.score;
+        } else {
+          errors.push(bad('OPTION_SCORE_INVALID',
+            `选项「${label || o.id}」的分值非法：${JSON.stringify(o.score)}（必须是 ${SCORE_MIN}..${SCORE_MAX} 的整数；留空视为 0）`,
+            oat));
+        }
+        let scoreNote = '';
+        if (o.scoreNote === undefined || o.scoreNote === null) {
+          scoreNote = '';
+        } else if (typeof o.scoreNote === 'string') {
+          scoreNote = o.scoreNote.trim();
+          if (scoreNote.length > SCORE_NOTE_MAX) {
+            errors.push(bad('OPTION_SCORE_NOTE_TOO_LONG',
+              `选项「${label || o.id}」的评分说明最长 ${SCORE_NOTE_MAX} 字，当前 ${scoreNote.length} 字`, oat));
+          }
+        } else {
+          errors.push(bad('OPTION_SCORE_NOTE_INVALID', `选项「${label || o.id}」的评分说明必须是文本`, oat));
+        }
+
         options.push({
           id: ID_RE.test(o.id || '') ? o.id : `__bad_opt_${j}`,
           label,
           conditions: conds,
           changes,
           toNodeId: typeof o.toNodeId === 'string' ? o.toNodeId : '',
+          score,
+          scoreNote,
         });
       }
 
@@ -215,6 +246,8 @@ function normalizeDraft(raw) {
         conditions: o.conditions,
         changes: o.changes,
         toNodeId: o.toNodeId,
+        score: o.score,
+        scoreNote: o.scoreNote || '',
       })),
     })),
   };
@@ -313,6 +346,23 @@ function formatStateValues(scenario, mask) {
     name: s.name,
     value: ((mask >> i) & 1) === 1,
   }));
+}
+
+// ---------- 评分 ----------
+// 规则冻结在版本内容里：选项的 score 为 -10..10 整数。
+// 旧版本（早于评分功能发布）的选项没有分值字段，一律按 0 分处理。
+
+function findOption(scenario, nodeId, optionId) {
+  const node = scenario.nodes.find((n) => n.id === nodeId);
+  return node ? node.options.find((o) => o.id === optionId) || null : null;
+}
+
+function optionScore(option) {
+  return option && Number.isInteger(option.score) ? option.score : 0;
+}
+
+function optionScoreNote(option) {
+  return option && typeof option.scoreNote === 'string' ? option.scoreNote : '';
 }
 
 /**
@@ -497,6 +547,9 @@ function formatPathReport(scenario, segments) {
 
 module.exports = {
   MAX_STATES,
+  SCORE_MIN,
+  SCORE_MAX,
+  SCORE_NOTE_MAX,
   normalizeDraft,
   analyze,
   witnessPath,
@@ -508,4 +561,7 @@ module.exports = {
   applyChanges,
   conditionMaskAndNeed,
   decodeKey,
+  findOption,
+  optionScore,
+  optionScoreNote,
 };

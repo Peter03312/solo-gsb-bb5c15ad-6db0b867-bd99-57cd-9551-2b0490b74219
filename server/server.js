@@ -15,7 +15,7 @@ const {
   initialMask,
   decodeKey,
 } = require('./scenario');
-const { buildSnapshot, performMove, forkSession, loadLineage } = require('./session');
+const { buildSnapshot, performMove, forkSession, loadLineage, computeTotalScore } = require('./session');
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'app.db');
@@ -263,16 +263,35 @@ app.post('/api/sessions', (req, res) => {
   res.status(201).json(buildSnapshot(content, session, sc.id, sc.current_version));
 });
 
-// 会话列表（便于恢复）
+// 会话列表（便于恢复；总分按各自绑定版本的冻结规则与已完成路径实时计算）
 app.get('/api/sessions', (req, res) => {
   const rows = db.prepare(`
     SELECT se.code, se.scenario_id, s.title AS scenario_title, se.version, se.status,
            se.step_no, se.trainee_name, se.current_node_id, se.created_at, se.updated_at,
-           se.parent_code, se.fork_step_no, se.root_code
+           se.parent_code, se.fork_step_no, se.root_code, se.path
       FROM sessions se JOIN scenarios s ON s.id = se.scenario_id
      ORDER BY se.updated_at DESC LIMIT 200
   `).all();
-  res.json(rows);
+  const contentCache = new Map();
+  const contentFor = (scenarioId, version) => {
+    const key = `${scenarioId}|${version}`;
+    if (!contentCache.has(key)) {
+      const r = db.prepare('SELECT content FROM versions WHERE scenario_id = ? AND version = ?')
+        .get(scenarioId, version);
+      contentCache.set(key, r ? JSON.parse(r.content) : null);
+    }
+    return contentCache.get(key);
+  };
+  res.json(rows.map((se) => {
+    const { path, ...rest } = se;
+    let content;
+    try {
+      content = contentFor(se.scenario_id, se.version);
+    } catch (_) { content = null; }
+    let totalScore = 0;
+    try { totalScore = content ? computeTotalScore(content, JSON.parse(path || '[]')) : 0; } catch (_) { totalScore = 0; }
+    return { ...rest, total_score: totalScore };
+  }));
 });
 
 // 查询会话现状
@@ -305,10 +324,21 @@ app.post('/api/sessions/:code/move', (req, res) => {
     });
   }
   const sc = db.prepare('SELECT title FROM scenarios WHERE id = ?').get(result.session.scenario_id);
+  const snapshot = buildSnapshot(result.content, result.session, result.session.scenario_id, result.session.version);
+  // 本次有效选择的得分与说明（过期/重复/条件不符不会走到这里，故不改变成绩）
+  const last = snapshot.path.find((p) => p.step === result.session.step_no) || null;
   res.json({
     ok: true,
-    ...buildSnapshot(result.content, result.session, result.session.scenario_id, result.session.version),
+    ...snapshot,
     scenarioTitle: sc ? sc.title : null,
+    lastMove: last ? {
+      step: last.step,
+      optionId: last.optionId,
+      optionLabel: last.optionLabel,
+      score: last.score,
+      scoreNote: last.scoreNote,
+      totalScore: snapshot.totalScore,
+    } : null,
   });
 });
 
@@ -346,12 +376,15 @@ app.post('/api/sessions/:code/fork', (req, res) => {
       });
     }
     const sc = db.prepare('SELECT title FROM scenarios WHERE id = ?').get(result.session.scenario_id);
+    const snapshot = buildSnapshot(result.content, result.session, result.session.scenario_id, result.session.version);
+    // 分支尚未做出自己的选择，当前累计分即“截至分歧步已完成路径”的继承得分
     return res.status(201).json({
       ok: true,
       forkedFrom: req.params.code,
       forkStepNo,
-      ...buildSnapshot(result.content, result.session, result.session.scenario_id, result.session.version),
+      ...snapshot,
       scenarioTitle: sc ? sc.title : null,
+      inheritedScore: snapshot.totalScore,
     });
   }
   return res.status(500).json({ error: '分支会话码生成失败，请重试' });

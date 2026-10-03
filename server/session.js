@@ -4,6 +4,9 @@ const {
   optionAvailable,
   applyChanges,
   formatStateValues,
+  findOption,
+  optionScore,
+  optionScoreNote,
 } = require('./scenario');
 
 function nodesById(content) {
@@ -48,6 +51,8 @@ function buildSnapshot(content, session, scenarioId, version) {
     const fromNode = nodeMap.get(p.fromNodeId);
     const toNode = nodeMap.get(p.toNodeId);
     const fromN = fromNode ? fromNode.options.find((o) => o.id === p.optionId) : null;
+    // 旧版本选项没有评分字段时 findOption/optionScore 均退化为 0 分
+    const chosen = findOption(content, p.fromNodeId, p.optionId);
     return {
       step: p.step,
       fromNodeId: p.fromNodeId,
@@ -57,8 +62,11 @@ function buildSnapshot(content, session, scenarioId, version) {
       toNodeId: p.toNodeId,
       toNodeTitle: toNode ? toNode.title : p.toNodeId,
       stateAfter: formatStateValues(content, p.stateMask),
+      score: chosen ? optionScore(chosen) : 0,
+      scoreNote: chosen ? optionScoreNote(chosen) : '',
     };
   });
+  const totalScore = pathView.reduce((sum, p) => sum + p.score, 0);
 
   return {
     code: session.code,
@@ -66,6 +74,7 @@ function buildSnapshot(content, session, scenarioId, version) {
     version,
     status: session.status,
     stepNo: session.step_no,
+    totalScore,
     currentNode: node ? {
       id: node.id,
       title: node.title,
@@ -86,6 +95,19 @@ function buildSnapshot(content, session, scenarioId, version) {
       isBranch: !!session.parent_code,
     },
   };
+}
+
+/**
+ * 按“绑定版本的冻结规则 + 已完成路径”计算会话累计分（不写库）。
+ * 用于会话列表等只持有 path JSON 的场景；旧版本没有评分字段时各步按 0 分处理。
+ */
+function computeTotalScore(content, pathRows) {
+  let sum = 0;
+  for (const p of pathRows || []) {
+    const o = findOption(content, p.fromNodeId, p.optionId);
+    sum += optionScore(o);
+  }
+  return sum;
 }
 
 /**
@@ -309,11 +331,11 @@ function loadLineage(db, code) {
       s, s.scenario_id, s.version),
     scenarioTitle: sc ? sc.title : null,
     versionExists: !!contentFor(s),
+    children: [], // 子分支可能因 created_at 更早而排在父会话之前，建节点时即初始化
   }));
 
   const byCode = new Map(nodes.map((n) => [n.code, n]));
   for (const n of nodes) {
-    n.children = [];
     const parentCode = n.lineage.parentCode;
     if (parentCode && byCode.has(parentCode)) {
       byCode.get(parentCode).children.push(n);
@@ -326,4 +348,4 @@ function loadLineage(db, code) {
 }
 
 
-module.exports = { buildSnapshot, performMove, forkSession, loadLineage, nodesById };
+module.exports = { buildSnapshot, performMove, forkSession, loadLineage, nodesById, computeTotalScore };

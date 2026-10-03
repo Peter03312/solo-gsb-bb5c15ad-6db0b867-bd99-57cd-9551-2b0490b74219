@@ -182,6 +182,30 @@ code { background: #eef2f6; padding: 1px 6px; border-radius: 4px; font-size: 12p
 .path-list li { margin-bottom: 8px; font-size: 13px; }
 .path-list .pl-sub { color: var(--muted); font-size: 12px; display: block; }
 .path-list .pl-end { color: var(--ok); font-weight: 600; }
+.path-list .pl-note { display: block; font-size: 12px; color: var(--brand-dark); background: #f2f7fd; border-radius: 4px; padding: 2px 6px; margin-top: 2px; }
+
+/* ---------- 得分 ---------- */
+.score-pos { color: var(--ok); font-weight: 700; }
+.score-neg { color: var(--err); font-weight: 700; }
+.score-zero { color: var(--muted); font-weight: 600; }
+.step-score {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.step-score.score-pos { background: var(--ok-bg); }
+.step-score.score-neg { background: var(--err-bg); }
+.step-score.score-zero { background: #eef1f4; }
+
+/* 编辑器中的评分行 */
+.score-field { margin-top: 8px; }
+.score-edit-row { display: flex; gap: 8px; align-items: center; }
+.score-edit-row .score-input { width: 76px; flex: none; }
+.score-edit-row .score-note { flex: 1; }
 
 .banner { border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; font-size: 13px; }
 .banner.error { background: var(--err-bg); color: var(--err); border: 1px solid #f5c4bf; }
